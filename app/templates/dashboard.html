@@ -49,9 +49,6 @@
     <div class="card"><div class="label">Resolution rate</div><div class="value {{ 'good' if (m.resolution_rate_pct or 0) >= 70 else 'bad' }}">
       {{ m.resolution_rate_pct if m.resolution_rate_pct is not none else '—' }}{{ '%' if m.resolution_rate_pct is not none else '' }}
     </div></div>
-    <div class="card"><div class="label">Mean time to PR</div><div class="value neutral">
-      {{ m.mttr_minutes if m.mttr_minutes is not none else '—' }}{{ ' min' if m.mttr_minutes is not none else '' }}
-    </div></div>
   </div>
   <p class="sub" style="margin-top:-1.5rem;">
     Resolution rate = (PRs opened + correctly blocked) / terminal sessions — Devin reaching a
@@ -74,30 +71,6 @@
     {% else %}
     <p class="sub">No completed sessions yet.</p>
     {% endif %}
-  </section>
-
-  <section>
-    <h2>Devin vs. naive bump (control comparison)</h2>
-    <p class="sub">Naive = version-string edit only, no test run — what a bump script or Dependabot would produce. "Beyond lockfile" is a hard signal that real diagnosis happened, not a claim.</p>
-    <table>
-      <tr><th>Package</th><th>Naive PR</th><th>Naive files touched</th><th>Devin PR</th><th>Devin status</th><th>Devin files touched</th></tr>
-      {% for c in m.comparisons %}
-      <tr>
-        <td>{{ c.package }}</td>
-        <td><a href="{{ c.naive_pr_url }}" target="_blank">PR</a></td>
-        <td>{{ c.naive_files_changed }}{{ ' (lockfile only)' if c.naive_lockfile_only else '' }}</td>
-        <td>{% if c.devin_pr_url %}<a href="{{ c.devin_pr_url }}" target="_blank">PR</a>{% else %}—{% endif %}</td>
-        <td>{% if c.devin_status %}<span class="status {{ c.devin_status }}">{{ c.devin_status }}</span>{% else %}not started{% endif %}</td>
-        <td>
-          {% if c.devin_files_changed is not none %}
-            {{ c.devin_files_changed }}{{ ' (lockfile only)' if c.devin_lockfile_only else ' — beyond lockfile' if c.devin_lockfile_only == false else '' }}
-          {% else %}—{% endif %}
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="6" class="sub">No control comparisons registered yet.</td></tr>
-      {% endfor %}
-    </table>
   </section>
 
   <section>

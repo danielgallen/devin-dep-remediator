@@ -55,19 +55,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     finished_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS naive_prs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    finding_id TEXT NOT NULL REFERENCES findings(id),
-    package TEXT NOT NULL,
-    github_issue_number INTEGER,
-    pr_number INTEGER NOT NULL UNIQUE,
-    pr_url TEXT NOT NULL,
-    files_changed INTEGER,
-    lockfile_only INTEGER,
-    note TEXT,
-    created_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,

@@ -48,8 +48,9 @@ transition is logged to a dashboard.
                      ▼                                     ▼
              outcome == "fixed"                   outcome == "blocked"
              label: devin-pr-open                 label: devin-blocked
-             (PR opened, verified)                (rationale + evidence
-                     │                             posted to the issue)
+             (PR opened; Devin's own               (rationale + evidence
+              claim, spot-checked via                posted to the issue)
+              lockfile-only file diff)
                      └─────────────────┬──────────────────┘
                                        ▼
                           ┌─────────────────────────┐
@@ -59,7 +60,7 @@ transition is logged to a dashboard.
                           └────────────┬─────────────┘
                                        ▼
                           ┌─────────────────────────┐
-                          │  /dashboard, /api/metrics│  success rate, MTTR,
+                          │  /dashboard, /api/metrics│  success rate,
                           │                          │  throughput, active sessions
                           └─────────────────────────┘
 ```
@@ -67,31 +68,6 @@ transition is logged to a dashboard.
 One FastAPI service (`app/main.py`) with two background jobs (APScheduler)
 and a webhook route — no queue, no separate worker; the volume here (one
 repo's dependency findings) doesn't need one.
-
-## Design notes
-
-**`"blocked"` is a first-class outcome, not a failure.** Not every CVE has
-a safe fix at scan time — a patched release might not exist yet, or the fix
-might reintroduce a regression the codebase already hit and reverted. Each
-Devin v3 session is created with a `structured_output_schema`
-(`orchestrator.REMEDIATION_OUTPUT_SCHEMA`) and `structured_output_required=True`,
-so a session can't end without an explicit `"fixed"` or `"blocked"` verdict
-plus a written rationale and cited evidence, instead of the automation
-inferring success from whether a PR happened to appear. `"blocked"` gets its
-own label (`devin-blocked`) and dashboard section, tracked separately from
-an actual session error (`devin-failed`). `orchestrator.build_prompt`
-instructs Devin to check for existing version constraints and their history
-(comments, linked issues/PRs) before proposing a change — a passing test
-suite isn't sufficient evidence a bump is safe if it re-crosses a boundary
-the codebase has already reverted once.
-
-**Naive-bump comparison.** For two of the filed findings, a hand-authored
-"naive bump" PR (version string only, no tests — what Dependabot or a bump
-script produces) is registered alongside Devin's PR
-(`orchestrator.record_naive_pr` / `scripts/register_naive_pr.py`), so the
-dashboard can show files-changed-beyond-the-lockfile side by side. If
-Devin's PR is also lockfile-only, that's an honest result: the bump was
-safe and a script would have sufficed.
 
 ## Repo layout
 
@@ -113,11 +89,16 @@ scripts/
   register_webhook.py     wires the GitHub webhook to a public URL via `gh`
   simulate_webhook.py     fires a signed webhook locally against a real issue
   mock_devin_server.py    stand-in Devin API for offline/no-ACU runs
-  register_naive_pr.py    registers a naive-bump control PR for comparison
 sample_issues/             filed issue bodies (real CVE data)
 ```
 
 ## Running it
+
+The app and its scripts run in Docker — you don't need a local Python
+install for most of this. You do need Docker, Docker Compose, and an
+authenticated [`gh` CLI](https://cli.github.com/) (`gh auth login`) for the
+fork step and for `register_webhook.py`, which shells out to `gh` directly
+(see step 4).
 
 ### 1. Configure
 
@@ -131,58 +112,104 @@ Fill in:
   every session is attributable to that service user in Devin's own audit
   log.
 - `GITHUB_TOKEN` — a token (fine-grained PAT recommended, scoped to just the
-  fork) with issues + contents access on your fork.
+  fork) with **Issues: read/write** and **Pull requests: read** access on
+  your fork (`github_client.get_pr_files` reads changed-file lists off
+  opened PRs; nothing here touches repo contents directly).
 - `GITHUB_REPO` — `youruser/superset`, your fork.
 - `GITHUB_WEBHOOK_SECRET` — `openssl rand -hex 32`.
 
-### 2. Fork + seed
+`docker compose` reads `.env` directly (`env_file:` in
+[`docker-compose.yml`](docker-compose.yml)), so this file must exist —
+even with placeholder values — before step 3, or `docker compose up` will
+fail to start.
+
+### 2. Fork Superset
 
 ```bash
 gh repo fork apache/superset --clone=false
 gh api repos/<you>/superset -X PATCH -f has_issues=true   # forks have Issues off by default
-python scripts/seed_fork_issues.py                        # real scan, real issues filed
 ```
 
-### 3. Run
+### 3. Build and start
 
 ```bash
-docker compose up --build
-# or locally:
-pip install -r requirements.txt && uvicorn app.main:app --port 8080
+docker compose up --build -d
 ```
 
-Dashboard: `http://localhost:8080/dashboard`
+Dashboard: [http://localhost:8080/dashboard](http://localhost:8080/dashboard)
+Health check: `GET /healthz`
+
+This starts the FastAPI app with both background jobs running (session
+poller + the periodic OSV scan, every `SCAN_INTERVAL_SECONDS`, 24h by
+default). To see findings immediately instead of waiting for the first
+scheduled scan, run the scan once, synchronously, inside the running image:
+
+```bash
+docker compose run --rm app python scripts/seed_fork_issues.py
+```
+
+This files real GitHub issues on your fork (see [`sample_issues/`](sample_issues/)
+for what one looks like).
 
 ### 4. Wire the trigger
 
-For a real webhook (needs a public URL, e.g. via a tunnel):
+For a real webhook (needs a public URL, e.g. via a tunnel such as `ngrok` or
+`cloudflared`), run this one **on the host**, not via `docker compose run` —
+it shells out to `gh`, which isn't installed in the container:
 ```bash
 python scripts/register_webhook.py https://your-public-url.example.com
 ```
+(needs `pip install -r requirements.txt` on the host first, since it imports
+`app.config`.)
 
-To run locally without exposing anything publicly:
+To trigger locally without exposing anything publicly:
 ```bash
 gh issue edit <n> -R <you>/superset --add-label devin-fix
-python scripts/simulate_webhook.py <n>
+docker compose run --rm app python scripts/simulate_webhook.py <n> --url http://app:8080
 ```
 
 Both paths hit the exact same `handle_issue_labeled` code — the simulator
 just replaces the network hop from GitHub to your machine with a direct
 call, signed with the same secret. It still pulls the real issue body from
-GitHub.
+GitHub. (`--url http://app:8080` targets the running `app` service by its
+Docker Compose network name; omit it if you're running the app locally with
+`uvicorn` instead, where the default `http://localhost:8080` is correct.)
+
+### Running locally without Docker
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --port 8080
+```
+
+Everything above (`seed_fork_issues.py`, `register_webhook.py`,
+`simulate_webhook.py`) can then be run directly with `python scripts/...`
+instead of via `docker compose run`.
 
 ### Demo mode (no ACUs, no real Devin calls)
 
 ```bash
-docker compose --profile demo up --build
+docker compose --profile demo up --build -d
 # set in .env: DEVIN_API_BASE=http://mock-devin:8081  DEVIN_API_KEY=mock
 ```
+
+`DEVIN_API_BASE=http://mock-devin:8081` only resolves inside the Compose
+network (it's the `mock-devin` service's container name), so demo mode
+requires running through `docker compose --profile demo up`, not the local
+`uvicorn` path above.
 
 `scripts/mock_devin_server.py` implements the same three v3 endpoints
 (`/self`, `POST sessions`, `GET sessions/{id}`) and transitions a session to
 `exit` after 45s with a scripted `structured_output`, so the
 poller/dashboard/labeling loop — including the `blocked` path — is fully
 exercised without touching the real API.
+
+### Stopping / data
+
+```bash
+docker compose down          # stop, keep the sqlite volume (remediator_data)
+docker compose down -v       # stop and wipe all findings/issues/sessions data
+```
 
 ## Observability
 
@@ -192,8 +219,7 @@ exercised without touching the real API.
 - **PRs opened** vs. **blocked (needs human)** vs. **failed (errored)**
 - **Resolution rate** — (PRs opened + correctly blocked) / terminal sessions
 - **Blocked findings** — Devin's own rationale, shown next to the issue
-- **Devin vs. naive** comparison table
-- Mean time to PR, throughput (PRs/day), and a raw event/audit log
+- Throughput (PRs/day) and a raw event/audit log
 
 All of it is derived from the same `events` table the webhook and poller
 write to as they run.
@@ -210,7 +236,7 @@ write to as they run.
 - **Other trigger sources**: `handle_issue_labeled` works the same from a
   Slack slash command, a Jira webhook, or a nightly SAST scan instead of OSV.
 - **Cost tracking**: the v3 API returns `acus_consumed` per session; wiring
-  that into `metrics.py` turns "mean time to PR" into "cost per fix."
+  that into `metrics.py` gives a "cost per fix" number.
 - **Policy for blocked findings**: e.g. auto-recheck on a schedule instead
   of only re-triggering on label, for cases blocked on an upstream patch
   that hasn't shipped yet.

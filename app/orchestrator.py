@@ -337,32 +337,6 @@ def _poll_one(row: dict) -> None:
         )
 
 
-def record_naive_pr(finding_id: str, package: str, pr_url: str, github_issue_number: int | None, note: str = "") -> dict:
-    """Registers a hand-authored 'naive bump' control PR (version-string edit
-    only, no test run) so the dashboard can show it next to the Devin PR for
-    the same finding — the files-changed/lockfile-only comparison is what
-    makes 'why Devin' a number instead of a claim."""
-    pr_number = github.get_pr_number_from_url(pr_url)
-    files = github.get_pr_files(pr_number)
-    files_changed = len(files)
-    lockfile_only = int(is_lockfile_only(files))
-    now = datetime.now(timezone.utc).isoformat()
-
-    with db.cursor() as cur:
-        cur.execute(
-            """INSERT INTO naive_prs (finding_id, package, github_issue_number, pr_number, pr_url,
-               files_changed, lockfile_only, note, created_at) VALUES (?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(pr_number) DO UPDATE SET files_changed=excluded.files_changed,
-               lockfile_only=excluded.lockfile_only""",
-            (finding_id, package, github_issue_number, pr_number, pr_url, files_changed, lockfile_only, note, now),
-        )
-    db.log_event(
-        "naive_pr_recorded",
-        {"finding_id": finding_id, "package": package, "pr_url": pr_url, "files_changed": files_changed},
-    )
-    return {"pr_number": pr_number, "files_changed": files_changed, "lockfile_only": bool(lockfile_only)}
-
-
 def file_issue_for_finding(finding) -> dict | None:
     """Idempotently file a GitHub issue for a scanner Finding. Returns None if
     an issue for this exact finding (by content hash) already exists."""

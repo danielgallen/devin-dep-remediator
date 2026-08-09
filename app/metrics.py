@@ -1,14 +1,9 @@
 """Aggregates the sqlite audit trail into the numbers an eng leader actually wants:
-throughput, success rate, mean time to PR, and what's stuck right now."""
+throughput, success rate, and what's stuck right now."""
 
 import json
-from datetime import datetime
 
 from app import db
-
-
-def _parse(ts: str) -> datetime:
-    return datetime.fromisoformat(ts)
 
 
 def compute() -> dict:
@@ -16,7 +11,6 @@ def compute() -> dict:
         findings_count = cur.execute("SELECT COUNT(*) c FROM findings").fetchone()["c"]
         issues_count = cur.execute("SELECT COUNT(*) c FROM issues").fetchone()["c"]
         sessions = [dict(r) for r in cur.execute("SELECT * FROM sessions").fetchall()]
-        naive_prs = [dict(r) for r in cur.execute("SELECT * FROM naive_prs").fetchall()]
         recent_events = [
             dict(r) for r in cur.execute("SELECT * FROM events ORDER BY id DESC LIMIT 25").fetchall()
         ]
@@ -50,39 +44,12 @@ def compute() -> dict:
     resolution_rate = (len(resolved) / len(terminal) * 100) if terminal else None
     success_rate = (len(succeeded) / len(terminal) * 100) if terminal else None
 
-    durations_minutes = []
-    for s in succeeded:
-        if s["created_at"] and s["finished_at"]:
-            delta = _parse(s["finished_at"]) - _parse(s["created_at"])
-            durations_minutes.append(delta.total_seconds() / 60)
-    mttr_minutes = sum(durations_minutes) / len(durations_minutes) if durations_minutes else None
-
     # Throughput: PRs opened per day, last 14 days, for the dashboard sparkline.
     by_day: dict[str, int] = {}
     for s in succeeded:
         day = s["finished_at"][:10]
         by_day[day] = by_day.get(day, 0) + 1
     throughput = sorted(by_day.items())[-14:]
-
-    # Devin vs naive comparison: for each finding with a naive-control PR,
-    # pair it with the Devin session for the same GitHub issue (if any).
-    sessions_by_issue = {s["github_issue_number"]: s for s in sessions}
-    comparisons = []
-    for naive in naive_prs:
-        devin_session = sessions_by_issue.get(naive["github_issue_number"])
-        comparisons.append(
-            {
-                "package": naive["package"],
-                "naive_pr_url": naive["pr_url"],
-                "naive_files_changed": naive["files_changed"],
-                "naive_lockfile_only": bool(naive["lockfile_only"]),
-                "devin_session_id": devin_session["session_id"] if devin_session else None,
-                "devin_pr_url": devin_session["pr_url"] if devin_session else None,
-                "devin_status": devin_session["status"] if devin_session else None,
-                "devin_files_changed": devin_session["files_changed"] if devin_session else None,
-                "devin_lockfile_only": bool(devin_session["lockfile_only"]) if devin_session and devin_session["lockfile_only"] is not None else None,
-            }
-        )
 
     blocked_sessions = []
     for s in blocked:
@@ -104,10 +71,8 @@ def compute() -> dict:
         "sessions_failed": len(failed),
         "success_rate_pct": round(success_rate, 1) if success_rate is not None else None,
         "resolution_rate_pct": round(resolution_rate, 1) if resolution_rate is not None else None,
-        "mttr_minutes": round(mttr_minutes, 1) if mttr_minutes is not None else None,
         "throughput_by_day": throughput,
         "active_sessions": active,
         "blocked_sessions": blocked_sessions,
-        "comparisons": comparisons,
         "recent_events": recent_events,
     }
