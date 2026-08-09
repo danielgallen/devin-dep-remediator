@@ -47,8 +47,7 @@ def _parse_issue_fields(body: str) -> dict[str, str]:
 # JSON Schema (Draft 7) passed as structured_output_schema on session creation,
 # with structured_output_required=True. This is what makes "fixed" vs. "blocked"
 # a verdict Devin is forced to commit to and justify, not a status we infer from
-# whether a PR happened to appear -- see README "Why structured output" for the
-# incident (apache/superset PR #42542) that motivated this.
+# whether a PR happened to appear -- see README "Design notes".
 REMEDIATION_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
