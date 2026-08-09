@@ -183,6 +183,23 @@ def handle_issue_labeled(issue: dict) -> None:
         log.info("Issue #%s already in progress, ignoring duplicate label event", number)
         return
 
+    # The label check above is only as reliable as the *last* run's ability to
+    # write that label back to GitHub. If a prior run created a Devin session
+    # (an irreversible, billed call) but then failed before/while setting the
+    # label -- a GitHub 401/5xx, a network blip -- GitHub redelivers the
+    # webhook, the issue still shows no in-progress label, and without this
+    # check we'd spin up a second paid session for the same issue. The DB
+    # row is written immediately after session creation succeeds, so this
+    # catches that case even when the label update never landed.
+    with db.cursor() as cur:
+        existing = cur.execute(
+            "SELECT 1 FROM sessions WHERE github_issue_number=? AND status NOT IN ('exit', 'error')",
+            (number,),
+        ).fetchone()
+    if existing:
+        log.info("Issue #%s already has an active Devin session, ignoring duplicate label event", number)
+        return
+
     prompt = build_prompt(issue)
     resp = devin.create_session(
         prompt=prompt,
