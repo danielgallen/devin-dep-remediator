@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - remediator_data:/data
+    restart: unless-stopped
+
+  # Optional: stand-in Devin API for demoing without real ACUs/network access.
+  # Run with: docker compose --profile demo up
+  # and set DEVIN_API_BASE=http://mock-devin:8081 / DEVIN_API_KEY=mock in .env
+  mock-devin:
+    build: .
+    command: ["uvicorn", "scripts.mock_devin_server:app", "--host", "0.0.0.0", "--port", "8081"]
+    ports:
+      - "8081:8081"
+    profiles: ["demo"]
+
+volumes:
+  remediator_data:
